@@ -1,16 +1,21 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import pickle
+import traceback
 import numpy as np
 import pandas as pd
+import sklearn
 from scipy import sparse
 from scipy.sparse import hstack
 
 
 app = FastAPI(title="Liar Model API")
 
-with open("best_model.pkl", "rb") as f:
-    bundle = pickle.load(f)
+try:
+    with open("best_model.pkl", "rb") as f:
+        bundle = pickle.load(f)
+except Exception as exc:
+    raise RuntimeError(f"Nie udalo sie wczytac best_model.pkl: {exc}") from exc
 
 model = bundle["model"]
 threshold = bundle["threshold"]
@@ -73,19 +78,32 @@ def build_features(req: PredictRequest):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "sklearn_version": sklearn.__version__,
+        "threshold": float(threshold),
+    }
 
 
 @app.post("/predict")
 def predict(req: PredictRequest):
-    x = build_features(req)
-    scores = model.decision_function(x)
-    probs = 1.0 / (1.0 + np.exp(-scores))
-    prob_true = float(probs[0])
-    prediction = int(prob_true >= threshold)
+    try:
+        x = build_features(req)
+        scores = model.decision_function(x)
+        probs = 1.0 / (1.0 + np.exp(-np.asarray(scores).ravel()))
+        prob_true = float(probs[0])
+        prediction = int(prob_true >= threshold)
 
-    return {
-        "prediction": prediction,
-        "prob_true": prob_true,
-        "threshold": float(threshold),
-    }
+        return {
+            "prediction": prediction,
+            "prob_true": prob_true,
+            "threshold": float(threshold),
+        }
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": str(exc),
+                "traceback": traceback.format_exc(),
+            },
+        )
